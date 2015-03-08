@@ -1,0 +1,144 @@
+#!/bin/bash
+
+######################################
+#  
+# Script for saving power - switch relay off 
+# when inactivity on Kodi detected
+#
+# Ver. 0.1 
+#
+#####################################
+
+
+#--------CONFIG--------------
+
+#Sleep offset between checks
+SLEEP_OFFSET=5
+
+# Debug log
+LOG=$0.log
+
+# Def pin
+RPI_PIN=4
+
+#--------------FUNCTIONS -----------------
+
+# Initialize the pin
+init_gpio()
+{
+	echo ${RPI_PIN} >  /sys/class/gpio/export
+}
+
+
+# Cleaning up the pin
+cleanup()
+{
+    echo ${RPI_PIN} > /sys/class/gpio/unexport
+}
+
+# Check if the screen is active 
+chck_screensaver() 
+{ 
+	RET=$(curl -s -H "Content-Type: application/json" -X POST -d '{"jsonrpc": "2.0", "method": "XBMC.GetInfoBooleans", "params": { "booleans": ["System.ScreenSaverActive "] }, "id":1}' http://localhost:8080/jsonrpc | grep true)
+	#echo ${RET}
+	if [[ ! -z "${RET}" ]];then
+		echo "Screen not active"
+		return 0
+	else
+		echo "Screen Active"
+		return 1
+	fi 
+}
+
+# Check if music is playing 
+chck_activity()
+{
+	RET=$(curl -s -H "Content-Type: application/json" -X POST -d '{"jsonrpc": "2.0", "method": "Player.GetActivePlayers", "id": 1}' http://localhost:8080/jsonrpc | grep audio)
+	#echo {$RET}
+	if [[ -z "${RET}" ]]; then
+		echo "Audio not playing"
+		return 0
+	else
+		echo "audio"
+		return 1
+	fi
+}
+
+# Check pin status 
+chck_pins() 
+{
+	RET=$(cat /sys/class/gpio/gpio${RPI_PIN}/direction)
+	if [[ ! $? -eq 0 ]]; then 
+		cleanup
+		init_gpio
+		RET=$(cat /sys/class/gpio/gpio${RPI_PIN}/direction)
+	fi
+	#echo ${RET}
+	if [ "${RET}" == "in" ]; then
+		# Power is on
+		return 0	
+		echo "Power is on"
+	else
+		# Power is off
+		return 1
+		echo "Power is off"
+	fi
+}
+
+
+pwr_on()
+{
+	echo "in" > /sys/class/gpio/gpio${RPI_PIN}/direction
+	echo "$(date +"%D-%T") - Turning relay ON" >> ${LOG}
+}
+
+pwr_off()
+{
+        echo "out" > /sys/class/gpio/gpio${RPI_PIN}/direction
+        echo "$(date +"%D-%T") - Turning relay OFF" >> ${LOG}
+}
+
+#---------------- "Daemonsing" loop -----------
+
+# Infinite loop to monitor the activity
+while true; do
+	# Check is screensaver is active
+
+	if chck_screensaver ; then
+		# Check if playing music
+		if chck_activity ; then
+			# Check if power is on
+			if chck_pins; then
+				# Power is on, so turn off
+				# Turn power off
+				pwr_off
+				#sleep 1
+				#continue
+			fi
+			else 
+			echo "Playing music"
+				if ! chck_pins ; then
+					# Power is off so turn it on
+					pwr_on
+					#sleep 1 
+					#continue
+			fi
+		fi
+	else	
+	# Screen is active lets make sure the power is on
+		if ! chck_pins;  then
+			pwr_on
+			#sleep 1 
+			#continue	
+		fi
+	fi
+	sleep ${SLEEP_OFFSET}
+done
+
+
+
+# Traps
+trap 'cleanup; exit' SIGHUP SIGINT SIGTERM SIGQUIT
+
+
+
